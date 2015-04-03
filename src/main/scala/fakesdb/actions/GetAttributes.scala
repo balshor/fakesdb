@@ -8,13 +8,13 @@ class GetAttributes(data: Data) extends Action(data) {
 
   def handle(params: Params): NodeSeq = {
     val domain = parseDomain(params)
-    val itemName = params.getOrElse("ItemName", error("No item name"))
+    val itemName = params.getOrElse("ItemName", sys.error("No item name"))
     val items = domain.getItem(itemName) match {
       case Some(item) => List(item)
       case None => List()
     }
     val requested = discoverAttributes(params)
-    <GetAttributesResponse xmlns="http://sdb.amazonaws.com/doc/2007-11-07/">
+    <GetAttributesResponse xmlns={namespace}>
       <GetAttributesResult>
         {for (item <- items) yield
           {for (nv <- filter(item, requested)) yield

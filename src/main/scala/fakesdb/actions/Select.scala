@@ -6,11 +6,15 @@ import fakesdb._
 class Select(data: Data) extends Action(data) {
 
   override def handle(params: Params): NodeSeq = {
-    val items = params.get("SelectExpression") match {
-      case Some(s) => val se = SelectParser.makeSelectEval(s) ; se.select(data)
-      case None => error("No select expression")
+    val nextToken = params.get("NextToken") map { _.toInt }
+    val itemsData = params.get("SelectExpression") match {
+      case Some(s) => val se = SelectParser.makeSelectEval(s) ; se.select(data, nextToken)
+      case None => sys.error("No select expression")
     }
-    <SelectResponse xmlns="http://sdb.amazonaws.com/doc/2007-11-07/">
+    val items = itemsData._1
+    val itemsLength = itemsData._2
+    val newNextToken = if (itemsData._3) List(itemsLength) else List()
+    <SelectResponse xmlns={namespace}>
       <SelectResult>
         {for (item <- items) yield
           <Item>
@@ -19,6 +23,9 @@ class Select(data: Data) extends Action(data) {
               <Attribute><Name>{nv._1}</Name><Value>{nv._2}</Value></Attribute>
             }
           </Item>
+        }
+        {for (token <- newNextToken) yield
+          <NextToken>{token}</NextToken>
         }
       </SelectResult>
       {responseMetaData}

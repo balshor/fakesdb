@@ -1,36 +1,44 @@
 package fakesdb
 
-import junit.framework.Assert._
-import com.xerox.amazonws.sdb.ItemAttribute
+import org.junit._
+import com.amazonaws.services.simpledb.model._
 
 class BatchPutAttributesTest extends AbstractFakeSdbTest {
 
-  override def setUp(): Unit = {
-    flush()
-    sdb.createDomain("domaina")
+  @Before
+  def createDomain(): Unit = {
+    createDomain("domaina")
   }
 
+  @Test
   def testPut(): Unit = {
-    val as = new java.util.ArrayList[ItemAttribute]()
-    as.add(new ItemAttribute("a", "1", true))
-    as.add(new ItemAttribute("b", "2", true))
-    val bs = new java.util.ArrayList[ItemAttribute]()
-    bs.add(new ItemAttribute("c", "3", true))
-    val m = new java.util.HashMap[String, java.util.List[ItemAttribute]]()
-    m.put("itema", as)
-    m.put("itemb", bs)
-    domaina.batchPutAttributes(m)
+    val req = new BatchPutAttributesRequest().withDomainName("domaina").withItems(
+      new ReplaceableItem("itema").withAttributes(
+        new ReplaceableAttribute("a", "1", true),
+        new ReplaceableAttribute("b", "2", true)
+      ),
+      new ReplaceableItem("itemb").withAttributes(
+        new ReplaceableAttribute("c", "3", true)
+      )
+    )
+    sdb.batchPutAttributes(req)
+
     // Check results
-    val itemas = domaina.getItem("itema").getAttributes
-    assertEquals(2, itemas.size)
-    assertEquals("a", itemas.get(0).getName)
-    assertEquals("1", itemas.get(0).getValue)
-    assertEquals("b", itemas.get(1).getName)
-    assertEquals("2", itemas.get(1).getValue)
-    val itembs = domaina.getItem("itemb").getAttributes
-    assertEquals(1, itembs.size)
-    assertEquals("c", itembs.get(0).getName)
-    assertEquals("3", itembs.get(0).getValue)
+    assertItems("domaina", "itema", "a = 1", "b = 2")
+    assertItems("domaina", "itemb", "c = 3")
+  }
+
+  @Test
+  def testPutTooMany(): Unit = {
+    val req = new BatchPutAttributesRequest().withDomainName("domaina")
+    for (i <- 1.to(26)) {
+      req.withItems(new ReplaceableItem("item"+i).withAttributes(
+        new ReplaceableAttribute("a", "1", true)
+      ))
+    }
+    assertFails("NumberSubmittedItemsExceeded", "NumberSubmittedItemsExceeded: Too many items in a single call. Up to 25 items per call allowed.", {
+      sdb.batchPutAttributes(req)
+    })
   }
 
 }

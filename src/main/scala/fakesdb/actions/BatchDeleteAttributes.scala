@@ -5,18 +5,18 @@ import scala.collection.mutable.LinkedHashMap
 import scala.xml.NodeSeq
 import fakesdb._
 
-class BatchPutAttributes(data: Data) extends Action(data) {
+class BatchDeleteAttributes(data: Data) extends Action(data) {
 
   def handle(params: Params): NodeSeq = {
     val domain = parseDomain(params)
-    discoverAttributes(params).update(domain)
-    <BatchPutAttributesResponse xmlns={namespace}>
+    discoverAttributes(params).delete(domain)
+    <BatchDeleteAttributesResponse xmlns={namespace}>
       {responseMetaData}
-    </BatchPutAttributesResponse>
+    </BatchDeleteAttributesResponse>
   }
 
   private def discoverAttributes(params: Params): ItemUpdates = {
-    val updates = new ItemUpdates
+    val updates = new ItemUpdates()
     var i = 0
     var stop = false
     while (!stop) {
@@ -28,13 +28,13 @@ class BatchPutAttributes(data: Data) extends Action(data) {
         var stop2 = false
         while (!stop2) {
           val attrName = params.get("Item."+i+".Attribute."+j+".Name")
-          val attrValue = params.get("Item."+i+".Attribute."+j+".Value")
-          val attrReplace = params.get("Item."+i+".Attribute."+j+".Replace")
-          if (attrName.isEmpty || attrValue.isEmpty) {
+          //values currently not supported.
+          //val attrValue = params.get("Item."+i+".Attribute."+j+".Value")
+          if (attrName.isEmpty) {
             if (j > 1) stop2 = true
+            updates.add(itemName.get)
           } else {
-            val replace = attrReplace.getOrElse("false").toBoolean
-            updates.add(itemName.get, attrName.get, attrValue.get, replace)
+            updates.add(itemName.get, attrName.get)
           }
           j += 1
         }

@@ -1,16 +1,16 @@
 package fakesdb
 
-import junit.framework.Assert._
-import com.xerox.amazonws.sdb.ItemAttribute
-import com.xerox.amazonws.sdb.SimpleDB
+import org.junit._
+import org.junit.Assert._
 
 class ErrorTest extends AbstractFakeSdbTest {
+  @Test
   def testEmptyQuery(): Unit = {
     try {
-      domaina.listItems
+      select("SELECT * FROM domaina")
       fail
     } catch {
-      case e => assertEquals("Client error : Invalid domain name domaina", e.getMessage)
+      case e: Exception => assertEquals("RuntimeException: Invalid from domaina", e.getMessage)
     }
   }
 }

@@ -1,23 +1,26 @@
 package fakesdb.actions
 
-import scala.collection.mutable.ListBuffer
 import scala.xml.NodeSeq
 import fakesdb._
 
-class PutAttributes(data: Data) extends Action(data) {
+class PutAttributes(data: Data) extends Action(data) with ConditionalChecking {
 
   def handle(params: Params): NodeSeq = {
     val domain = parseDomain(params)
-    val itemName = params.getOrElse("ItemName", error("No item name"))
+    val itemName = params.getOrElse("ItemName", throw new MissingItemNameException)
     val item = domain.getOrCreateItem(itemName)
-    discoverAttributes(params).foreach((t: (String, String, Boolean)) => item.put(t._1, t._2, t._3))
-    <PutAttributesResponse xmlns="http://sdb.amazonaws.com/doc/2007-11-07/">
+
+    checkConditionals(item, params)
+
+    discoverAttributes(itemName, params).update(domain)
+
+    <PutAttributesResponse xmlns={namespace}>
       {responseMetaData}
     </PutAttributesResponse>
   }
 
-  private def discoverAttributes(params: Params): List[(String, String, Boolean)] = {
-    val attrs = new ListBuffer[(String, String, Boolean)]()
+  private def discoverAttributes(itemName: String, params: Params): ItemUpdates = {
+    val updates = new ItemUpdates()
     var i = 0
     var stop = false
     while (!stop) {
@@ -27,11 +30,11 @@ class PutAttributes(data: Data) extends Action(data) {
       if (attrName.isEmpty || attrValue.isEmpty) {
         if (i > 1) stop = true
       } else {
-        attrs += ((attrName.get, attrValue.get, attrReplace.getOrElse("false").toBoolean))
+        val replace = attrReplace.getOrElse("false").toBoolean
+        updates.add(itemName, attrName.get, attrValue.get, replace)
       }
       i += 1
     }
-    attrs.toList
+    updates
   }
-
 }

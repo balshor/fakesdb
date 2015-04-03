@@ -1,18 +1,21 @@
 package fakesdb
 
-import junit.framework.Assert._
+import org.junit._
+import org.junit.Assert._
+import com.amazonaws.services.simpledb.model._
 
 class DomainMetadataTest extends AbstractFakeSdbTest {
 
-  override def setUp(): Unit = {
-    super.setUp
-    sdb.createDomain("domaina")
+  @Before
+  def createDomain(): Unit = {
+    createDomain(domaina)
   }
 
+  @Test
   def testFoo(): Unit = {
     add(domaina, "itema", "aa" -> "111", "bb" -> "222", "bb" -> "333")
 
-    val result = domaina.getMetadata
+    val result = sdb.domainMetadata(new DomainMetadataRequest(domaina))
     assertEquals(1, result.getItemCount)
     assertEquals(5l, result.getItemNamesSizeBytes)
     assertEquals(2, result.getAttributeNameCount)

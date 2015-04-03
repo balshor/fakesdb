@@ -1,15 +1,16 @@
 package fakesdb
 
-import scala.collection.mutable.ListBuffer
 import scala.util.parsing.combinator.syntactical._
 import scala.util.parsing.combinator.syntactical._
 import scala.util.parsing.combinator.lexical._
+import scala.util.parsing.input.CharArrayReader.EofCh
 
 case class SelectEval(output: OutputEval, from: String, where: WhereEval, order: OrderEval, limit: LimitEval)  {
-  def select(data: Data): List[(String, List[(String,String)])] = {
-    val domain = data.getDomain(from).getOrElse(error("Invalid from "+from))
-    val items = limit.limit(order.sort(where.filter(domain, domain.getItems.toList)))
-    output.what(domain, items)
+  def select(data: Data, nextToken: Option[Int] = None): (List[(String, List[(String,String)])], Int, Boolean) = {
+    val domain = data.getDomain(from).getOrElse(sys.error("Invalid from "+from))
+    val drop = new SomeDrop(nextToken getOrElse 0)
+    val (items, hasMore) = limit.limit(drop.drop(order.sort(where.filter(domain, domain.getItems.toList))))
+    (output.what(domain, items), items.length, hasMore)
   }
 }
 
@@ -73,13 +74,17 @@ case class SimpleWhereEval(name: String, op: String, value: String) extends Wher
 }
 
 abstract class LimitEval {
-  def limit(items: List[Item]): List[Item]
+  def limit(items: List[Item]): (List[Item], Boolean)
 }
 case class NoopLimit() extends LimitEval {
-  def limit(items: List[Item]) = items
+  def limit(items: List[Item]) = (items, false)
 }
 case class SomeLimit(limit: Int) extends LimitEval {
-  def limit(items: List[Item]) = items take limit
+  def limit(items: List[Item]) = (items take limit, items.size > limit)
+}
+
+case class SomeDrop(count: Int) {
+  def drop(items: List[Item]) = items drop count
 }
 
 case class EveryEval(name: String, op: String, value: String) extends WhereEval {
@@ -97,7 +102,7 @@ case class CompoundWhereEval(sp: WhereEval, op: String, rest: WhereEval) extends
       case "intersection" => sp.filter(domain, items).toList intersect rest.filter(domain, items).toList
       case "and" => sp.filter(domain, items).toList intersect rest.filter(domain, items).toList
       case "or" => sp.filter(domain, items).toList union rest.filter(domain, items).toList
-      case _ => error("Invalid operator "+op)
+      case _ => sys.error("Invalid operator "+op)
     }
   }
 }
@@ -155,34 +160,52 @@ case class SimpleOrderEval(name: String, way: String) extends OrderEval {
   }
 }
 
-// Use our own lexer because the "()" in "itemName()"
 class SelectLexical extends StdLexical {
   override def token: Parser[Token] =
-   ( accept("itemName()".toList) ^^ { x => Identifier("itemName()") }
-   | accept("count(*)".toList) ^^ { x => Keyword("count(*)") }
-   | letter ~ rep( letter | digit | '_' | '.' | '-' ) ^^ { case first ~ rest => processIdent(first :: rest mkString "") }
+   ( accept("itemName()".toList) ^^^ { Identifier("itemName()") }
+   | acceptInsensitiveSeq("count(*)".toList) ^^^ { Keyword("count(*)") }
+   | '\'' ~> rep(chrWithDoubleTicks) <~ '\'' ^^ { chars => StringLit(chars mkString "") }
+   | '"' ~> rep(chrWithDoubleQuotes) <~ '"' ^^ { chars => StringLit(chars mkString "") }
+   | '`' ~> rep(chrWithDoubleBackTicks) <~ '`' ^^ { chars => Identifier(chars mkString "") }
    | super.token
   )
+
+  // Add $ to letters and _ as acceptable first characters of unquoted identifiers
+  override def identChar = letter | elem('_') | elem('$')
+
   // Allow case insensitive keywords by lower casing everything
   override protected def processIdent(name: String) =
     if (reserved contains name.toLowerCase) Keyword(name.toLowerCase) else Identifier(name)
+
+  // Wow this works--inline acceptSeq and acceptIf, but adds _.toLowerCase
+  def acceptInsensitiveSeq[ES <% Iterable[Elem]](es: ES): Parser[List[Elem]] =
+    es.foldRight[Parser[List[Elem]]](success(Nil)){(x, pxs) => acceptIf(_.toLower == x)("`"+x+"' expected but " + _ + " found") ~ pxs ^^ mkList}
+
+  def chrWithDoubleTicks = ('\'' ~ '\'') ^^^ '\'' | chrExcept('\'', EofCh)
+
+  def chrWithDoubleQuotes = ('"' ~ '"') ^^^ '"' | chrExcept('"', EofCh)
+
+  def chrWithDoubleBackTicks = ('`' ~ '`') ^^^ '`' | chrExcept('`', EofCh)
 }
 
 object SelectParser extends StandardTokenParsers {
   override val lexical = new SelectLexical
-  lexical.delimiters ++= List("*", ",", "=", "!=", ">", "<", ">=", "<=", "(", ")", "`")
-  lexical.reserved ++= List("select", "from", "where", "and", "or", "like", "not", "is", "null", "between", "every", "in", "order", "by", "asc", "desc", "intersection", "limit")
+  lexical.delimiters ++= List("*", ",", "=", "!=", ">", "<", ">=", "<=", "(", ")")
+  lexical.reserved ++= List(
+    "select", "from", "where", "and", "or", "like", "not", "is", "null", "between",
+    "every", "in", "order", "by", "asc", "desc", "intersection", "limit", "count(*)"
+  )
 
-  def expr = ("select" ~> outputList) ~ (("from" ~> ident) | ("from" ~> "`" ~> ident <~ "`")) ~ whereClause ~ order ~ limit ^^ { case ol ~ i ~ w ~ o ~ l => SelectEval(ol, i, w, o, l) }
+  def expr = ("select" ~> outputList) ~ ("from" ~> ident) ~ whereClause ~ order ~ limit ^^ { case ol ~ i ~ w ~ o ~ l => SelectEval(ol, i, w, o, l) }
 
   def order: Parser[OrderEval] =
     ( "order" ~> "by" ~> ident ~ ("asc" | "desc") ^^ { case i ~ way => SimpleOrderEval(i, way) }
-    | "order" ~> "by" ~> ident ^^ { case i => SimpleOrderEval(i, "asc") }
+    | "order" ~> "by" ~> ident ^^ { i => SimpleOrderEval(i, "asc") }
     | success(NoopOrder())
   )
 
   def limit: Parser[LimitEval] =
-    ( "limit" ~ numericLit ^^ { case l ~ num => SomeLimit(num.toInt) }
+    ( "limit" ~> numericLit ^^ { num => SomeLimit(num.toInt) }
     | success(NoopLimit())
   )
 
@@ -196,29 +219,29 @@ object SelectParser extends StandardTokenParsers {
   )
 
   def simplePredicate: Parser[WhereEval] =
-    ( ident ~ "is" ~ "null" ^^ { case i ~ is ~ nul => IsNullEval(i, true) }
-    | ident ~ "is" ~ "not" ~ "null" ^^ { case i ~ is ~ no ~ nul => IsNullEval(i, false) }
-    | ident ~ "between" ~ stringLit ~ "and" ~ stringLit ^^ { case i ~ bw ~ a ~ an ~ b => IsBetweenEval(i, a, b) }
-    | ident ~ "in" ~ "(" ~ repsep(stringLit, ",") ~ ")" ^^ { case i ~ instr ~ lp ~ strs ~ rp => InEval(i, strs) }
-    | "every" ~ "(" ~ ident ~ ")" ~ op ~ stringLit ^^ { case estr ~ lp ~ i ~ rp ~ o ~ v => EveryEval(i, o, v)}
+    ( ident <~ "is" <~ "null" ^^ { i => IsNullEval(i, true) }
+    | ident <~ "is" <~ "not" <~ "null" ^^ { i => IsNullEval(i, false) }
+    | ident ~ ("between" ~> stringLit) ~ ("and" ~> stringLit) ^^ { case i ~ a ~ b => IsBetweenEval(i, a, b) }
+    | ident ~ ("in" ~> "(" ~> repsep(stringLit, ",") <~ ")") ^^ { case i ~ strs => InEval(i, strs) }
+    | ("every" ~> "(" ~> ident <~ ")") ~ op ~ stringLit ^^ { case i ~ o ~ v => EveryEval(i, o, v)}
     | ident ~ op ~ stringLit ^^ { case i ~ o ~ v => SimpleWhereEval(i, o, v) }
     | "(" ~> where <~ ")"
   )
   def setOp = "and" | "or" | "intersection"
-  def op = "=" | "!=" | ">" | "<" | ">=" | "<=" | "like" | "not" ~ "like" ^^ { case n ~ l => "not-like" }
+  def op = "=" | "!=" | ">" | "<" | ">=" | "<=" | "like" | "not" ~ "like" ^^^ { "not-like" }
 
   def outputList: Parser[OutputEval] =
-    ( "*" ^^ { case s => new AllOutput }
-    | "count(*)" ^^ { _ => new CountOutput }
-    | repsep(ident, ",") ^^ { attrNames: List[String] => CompoundOutput(attrNames) }
+    ( "*" ^^^ { new AllOutput }
+    | "count(*)" ^^^ { new CountOutput }
+    | repsep(ident, ",") ^^ { attrNames => CompoundOutput(attrNames) }
   )
 
   def makeSelectEval(input: String): SelectEval = {
     val tokens = new lexical.Scanner(input)
     phrase(expr)(tokens) match {
       case Success(selectEval, _) => selectEval
-      case Failure(msg, _) => error(msg)
-      case Error(msg, _) => error(msg)
+      case Failure(msg, _) => sys.error(msg)
+      case Error(msg, _) => sys.error(msg)
     }
   }
 }
